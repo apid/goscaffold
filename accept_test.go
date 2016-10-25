@@ -25,6 +25,12 @@ var _ = Describe("Accept header tests", func() {
 			[]string{"text/plain", "text/xml"})).Should(Equal("text/plain"))
 	})
 
+	It("No header, two choices 2", func() {
+		Expect(SelectMediaType(
+			makeRequest(""),
+			[]string{"application/json", "text/plain"})).Should(Equal("application/json"))
+	})
+
 	It("One Header, two choices", func() {
 		Expect(SelectMediaType(
 			makeRequest("application/json"),
