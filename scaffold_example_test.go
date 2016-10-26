@@ -5,16 +5,29 @@ import (
 	"net/http"
 )
 
+const (
+	port = 8080
+)
+
 func Example() {
 	// Create a new scaffold that will listen for HTTP on port 8080
 	scaf := CreateHTTPScaffold()
-	scaf.SetInsecurePort(8080)
+	scaf.SetInsecurePort(port)
 
 	// Direct the scaffold to catch common signals and trigger a
 	// graceful shutdown.
 	scaf.CatchSignals()
 
+	// Set up a URL that may be used by a load balancer to test
+	// if the server is ready to handle requests
+	scaf.SetReadyPath("/ready")
+
+	// Set up a URL that may be used by infrastructure to test
+	// if the server is working or if it needs to be restarted or replaced
+	scaf.SetHealthPath("/healthy")
+
 	listener := &TestListener{}
+	fmt.Printf("Listening on %d\n", port)
 
 	// Listen now. The listener will return when the server is actually
 	// shut down.
