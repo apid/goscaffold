@@ -2,15 +2,29 @@ package goscaffold
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
 	"time"
 )
 
 const (
-	// DefaultGraceTimeout is the default amount of time to wait for a request to complete
+	// DefaultGraceTimeout is the default amount of time to wait for a request
+	// to complete. Default is 30 seconds, which is also the default grace period
+	// in Kubernetes.
 	DefaultGraceTimeout = 30 * time.Second
 )
+
+/*
+ErrSignalCaught is used in the "Shutdown" mechanism when the shutdown was
+caused by a SIGINT or SIGTERM.
+*/
+var ErrSignalCaught = errors.New("Caught shutdown signal")
 
 /*
 An HTTPScaffold provides a set of features on top of a standard HTTP
@@ -20,6 +34,7 @@ handlers.
 */
 type HTTPScaffold struct {
 	insecurePort     int
+	open             bool
 	tracker          *requestTracker
 	insecureListener net.Listener
 }
@@ -52,6 +67,9 @@ func (s *HTTPScaffold) InsecureAddress() string {
 
 /*
 Open opens up the port that was created when the scaffold was set up.
+This method is optional. It may be called before Listen so that we can
+retrieve the actual address where the server is listening before we actually
+start to listen.
 */
 func (s *HTTPScaffold) Open() error {
 	s.tracker = startRequestTracker(DefaultGraceTimeout)
@@ -63,6 +81,7 @@ func (s *HTTPScaffold) Open() error {
 		return err
 	}
 	s.insecureListener = il
+	s.open = true
 	return nil
 }
 
@@ -80,15 +99,26 @@ a dynamic port.
 Listen will block until the server is shutdown using "Shutdown" or one of
 the other shutdown mechanisms. It must not be called until after "Open"
 has been called.
+If shut down, Listen will return the error that was passed to the "shutdown"
+method.
 */
-func (s *HTTPScaffold) Listen(baseHandler http.Handler) {
+func (s *HTTPScaffold) Listen(baseHandler http.Handler) error {
+	if !s.open {
+		err := s.Open()
+		if err != nil {
+			return err
+		}
+		s.open = true
+	}
+
 	handler := &httpHandler{
 		s:       s,
 		handler: baseHandler,
 	}
 	go http.Serve(s.insecureListener, handler)
-	<-s.tracker.C
+	err := <-s.tracker.C
 	s.insecureListener.Close()
+	return err
 }
 
 /*
@@ -101,12 +131,47 @@ func (s *HTTPScaffold) Shutdown(reason error) {
 }
 
 /*
-CatchSignals directs the scaffold to catch SIGINT and SIGTERM (the signals
-sent by "Control-C" and "kill" by default) to trigger the markdown
-logic. Using this logic, when these signals are caught, the server will
-catch
+CatchSignals directs the scaffold to listen for common signals. It catches
+three signals. SIGINT (aka control-C) and SIGTERM (what "kill" sends by default)
+will cause the program to be marked down, and "SignalCaught" will be returned
+by the "Listen" method. SIGHUP ("kill -1" or "kill -HUP") will cause the
+stack trace of all the threads to be printed to stderr, just like a Java program.
 */
 func (s *HTTPScaffold) CatchSignals() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT)
+	signal.Notify(sigChan, syscall.SIGTERM)
+	signal.Notify(sigChan, syscall.SIGHUP)
+
+	go func() {
+		for {
+			sig := <-sigChan
+			switch sig {
+			case syscall.SIGINT, syscall.SIGTERM:
+				s.Shutdown(ErrSignalCaught)
+				signal.Reset()
+				return
+			case syscall.SIGHUP:
+				dumpStack()
+			}
+		}
+	}()
+}
+
+func dumpStack() {
+	stackSize := 32767
+	stackBuf := make([]byte, stackSize)
+	var w int
+
+	for w < stackSize {
+		w = runtime.Stack(stackBuf, true)
+		if w == stackSize {
+			stackSize *= 2
+			stackBuf = make([]byte, stackSize)
+		}
+	}
+
+	fmt.Fprint(os.Stderr, string(stackBuf[:w]))
 }
 
 type httpHandler struct {

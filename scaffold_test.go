@@ -13,15 +13,15 @@ import (
 var _ = Describe("Scaffold Tests", func() {
 	It("Validate framework", func() {
 		s := CreateHTTPScaffold()
-		stopChan := make(chan bool)
+		stopChan := make(chan error)
 		err := s.Open()
 		Expect(err).Should(Succeed())
 
 		go func() {
 			fmt.Fprintf(GinkgoWriter, "Gonna listen on %s\n", s.InsecureAddress())
-			s.Listen(&testHandler{})
+			stopErr := s.Listen(&testHandler{})
 			fmt.Fprintf(GinkgoWriter, "Done listening\n")
-			stopChan <- true
+			stopChan <- stopErr
 		}()
 
 		Eventually(func() bool {
@@ -30,8 +30,9 @@ var _ = Describe("Scaffold Tests", func() {
 		resp, err := http.Get(fmt.Sprintf("http://%s", s.InsecureAddress()))
 		Expect(err).Should(Succeed())
 		Expect(resp.StatusCode).Should(Equal(200))
-		s.Shutdown(errors.New("Validate"))
-		Eventually(stopChan).Should(Receive(BeTrue()))
+		shutdownErr := errors.New("Validate")
+		s.Shutdown(shutdownErr)
+		Eventually(stopChan).Should(Receive(Equal(shutdownErr)))
 	})
 
 	It("Shutdown", func() {
