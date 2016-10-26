@@ -1,7 +1,6 @@
 package goscaffold
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -27,16 +26,53 @@ caused by a SIGINT or SIGTERM.
 var ErrSignalCaught = errors.New("Caught shutdown signal")
 
 /*
+ErrManualStop is used when the user doesn't have a reason.
+*/
+var ErrManualStop = errors.New("Shutdown called")
+
+/*
+HealthStatus is a type of response from a health check.
+*/
+type HealthStatus int
+
+//go:generate stringer -type HealthStatus .
+
+const (
+	// OK denotes that everything is good
+	OK HealthStatus = iota
+	// NotReady denotes that the server is OK, but cannot process requests now
+	NotReady HealthStatus = iota
+	// Failed denotes that the server is bad
+	Failed HealthStatus = iota
+)
+
+/*
+HealthChecker is a type of function that an implementer may
+implement in order to customize what we return from the "health"
+and "ready" URLs. It must return either "OK", which means that everything
+is fine, "not ready," which means that the "ready" check will fail but
+the health check is OK, and "failed," which means that both are bad.
+The function may return an optional error, which will be returned as
+a reason for the status and will be placed in responses.
+*/
+type HealthChecker func() (HealthStatus, error)
+
+/*
 An HTTPScaffold provides a set of features on top of a standard HTTP
 listener. It includes an HTTP handler that may be plugged in to any
 standard Go HTTP server. It is intended to be placed before any other
 handlers.
 */
 type HTTPScaffold struct {
-	insecurePort     int
-	open             bool
-	tracker          *requestTracker
-	insecureListener net.Listener
+	insecurePort       int
+	managementPort     int
+	open               bool
+	tracker            *requestTracker
+	insecureListener   net.Listener
+	managementListener net.Listener
+	healthCheck        HealthChecker
+	healthPath         string
+	readyPath          string
 }
 
 /*
@@ -44,7 +80,11 @@ CreateHTTPScaffold makes a new scaffold. The default scaffold will
 do nothing.
 */
 func CreateHTTPScaffold() *HTTPScaffold {
-	return &HTTPScaffold{}
+	return &HTTPScaffold{
+		insecurePort:   0,
+		managementPort: -1,
+		open:           false,
+	}
 }
 
 /*
@@ -62,11 +102,68 @@ ephemeral port was used) where we are listening. It must only be
 called after "Listen."
 */
 func (s *HTTPScaffold) InsecureAddress() string {
+	if s.insecureListener == nil {
+		return ""
+	}
 	return s.insecureListener.Addr().String()
 }
 
 /*
-Open opens up the port that was created when the scaffold was set up.
+SetManagementPort sets the port number for management operations, including
+health checks and diagnostic operations. If not set, then these operations
+happen on the other ports. If set, then they only happen on this port.
+*/
+func (s *HTTPScaffold) SetManagementPort(p int) {
+	s.managementPort = p
+}
+
+/*
+ManagementAddress returns the actual address (including the port if an
+ephemeral port was used) where we are listening for management
+operations. If "SetManagementPort" was not set, then it returns null.
+*/
+func (s *HTTPScaffold) ManagementAddress() string {
+	if s.managementListener == nil {
+		return ""
+	}
+	return s.managementListener.Addr().String()
+}
+
+/*
+SetHealthPath sets up a health check on the management port (if set) or
+otherwise the main port. If a health check function has been supplied,
+it will return 503 if the function returns "Failed" and 200 otherwise.
+This path is intended to be used by systems like Kubernetes as the
+"health check." These systems will shut down the server if we return
+a non-200 URL.
+*/
+func (s *HTTPScaffold) SetHealthPath(p string) {
+	s.healthPath = p
+}
+
+/*
+SetReadyPath sets up a readines check on the management port (if set) or
+otherwise the main port. If a health check function has been supplied,
+it will return 503 if the function returns "Failed" or "Not Ready".
+It will also return 503 if the "Shutdown" function was called
+(or caught by signal handler). This path is intended to be used by
+load balancers that will decide whether to route calls, but not by
+systems like Kubernetes that will decide to shut down this server.
+*/
+func (s *HTTPScaffold) SetReadyPath(p string) {
+	s.readyPath = p
+}
+
+/*
+SetHealthChecker specifies a function that the scaffold will call every time
+"HealthPath" or "ReadyPath" is invoked.
+*/
+func (s *HTTPScaffold) SetHealthChecker(c HealthChecker) {
+	s.healthCheck = c
+}
+
+/*
+Open opens up the ports that were created when the scaffold was set up.
 This method is optional. It may be called before Listen so that we can
 retrieve the actual address where the server is listening before we actually
 start to listen.
@@ -81,6 +178,27 @@ func (s *HTTPScaffold) Open() error {
 		return err
 	}
 	s.insecureListener = il
+	defer func() {
+		if !s.open {
+			il.Close()
+		}
+	}()
+
+	if s.managementPort >= 0 {
+		ml, err := net.ListenTCP("tcp", &net.TCPAddr{
+			Port: s.managementPort,
+		})
+		if err != nil {
+			return err
+		}
+		s.managementListener = ml
+		defer func() {
+			if !s.open {
+				ml.Close()
+			}
+		}()
+	}
+
 	s.open = true
 	return nil
 }
@@ -111,23 +229,48 @@ func (s *HTTPScaffold) Listen(baseHandler http.Handler) error {
 		s.open = true
 	}
 
-	handler := &httpHandler{
-		s:       s,
-		handler: baseHandler,
+	// This is the handler that wraps customer API calls with tracking
+	trackingHandler := &requestHandler{
+		s:     s,
+		child: baseHandler,
 	}
-	go http.Serve(s.insecureListener, handler)
+	mgmtHandler := s.createManagementHandler()
+
+	var mainHandler http.Handler
+	if s.managementPort >= 0 {
+		// Management on separate port
+		mainHandler = trackingHandler
+		go http.Serve(s.managementListener, mgmtHandler)
+	} else {
+		// Management on same port
+		mgmtHandler.child = trackingHandler
+		mainHandler = mgmtHandler
+	}
+
+	go http.Serve(s.insecureListener, mainHandler)
+
 	err := <-s.tracker.C
+
 	s.insecureListener.Close()
+	if s.managementListener != nil {
+		s.managementListener.Close()
+	}
+
 	return err
 }
 
 /*
 Shutdown indicates that the server should stop handling incoming requests
 and exit from the "Serve" call. This may be called automatically by
-calling "CatchSignals," or automatically using this call.
+calling "CatchSignals," or automatically using this call. If
+"reason" is nil, a default reason will be assigned.
 */
 func (s *HTTPScaffold) Shutdown(reason error) {
-	s.tracker.shutdown(reason)
+	if reason == nil {
+		s.tracker.shutdown(ErrManualStop)
+	} else {
+		s.tracker.shutdown(reason)
+	}
 }
 
 /*
@@ -172,32 +315,4 @@ func dumpStack() {
 	}
 
 	fmt.Fprint(os.Stderr, string(stackBuf[:w]))
-}
-
-type httpHandler struct {
-	s       *HTTPScaffold
-	handler http.Handler
-}
-
-func (h *httpHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
-	startErr := h.s.tracker.start()
-	if startErr == nil {
-		h.handler.ServeHTTP(resp, req)
-		h.s.tracker.end()
-	} else {
-		mt := SelectMediaType(req, []string{"text/plain", "application/json"})
-		resp.Header().Set("Content-Type", mt)
-		resp.WriteHeader(http.StatusServiceUnavailable)
-		switch mt {
-		case "application/json":
-			re := map[string]string{
-				"error":   "Stopping",
-				"message": startErr.Error(),
-			}
-			buf, _ := json.Marshal(&re)
-			resp.Write(buf)
-		default:
-			resp.Write([]byte(startErr.Error()))
-		}
-	}
 }

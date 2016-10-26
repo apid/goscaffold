@@ -53,16 +53,11 @@ should proceed, and false if the request should fail because the server is
 shutting down.
 */
 func (t *requestTracker) start() error {
-	sd := atomic.LoadInt32(&t.shuttingDown)
-	if sd != 0 {
-		reason := t.shutdownReason.Load().(*error)
-		if reason == nil {
-			return nil
-		}
-		return *reason
+	md := t.markedDown()
+	if md == nil {
+		t.commandChan <- startRequest
 	}
-	t.commandChan <- startRequest
-	return nil
+	return md
 }
 
 /*
@@ -71,6 +66,23 @@ caller needs to ensure that start and end are always paired.
 */
 func (t *requestTracker) end() {
 	t.commandChan <- endRequest
+}
+
+/*
+markedDown returns nil if everything is good, and an error if the server
+has been marked down. The error is the one that was sent to the
+"Shutdown" method.
+*/
+func (t *requestTracker) markedDown() error {
+	sd := atomic.LoadInt32(&t.shuttingDown)
+	if sd != 0 {
+		reason := t.shutdownReason.Load().(*error)
+		if reason == nil {
+			return nil
+		}
+		return *reason
+	}
+	return nil
 }
 
 /*
