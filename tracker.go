@@ -16,6 +16,15 @@ const (
 )
 
 /*
+values for the shutdown state
+*/
+const (
+	running    int32 = iota
+	markedDown int32 = iota
+	shutDown   int32 = iota
+)
+
+/*
 The requestTracker keeps track of HTTP requests. In normal operations it
 just counts. Once the server has been marked for shutdown, however, it
 counts down to zero and returns a shutdown indication when that
@@ -26,7 +35,7 @@ type requestTracker struct {
 	// If "shutdown" is never called then this will never happen.
 	C              chan error
 	shutdownWait   time.Duration
-	shuttingDown   int32
+	shutdownState  int32
 	shutdownReason *atomic.Value
 	commandChan    chan int
 }
@@ -40,6 +49,7 @@ func startRequestTracker(shutdownWait time.Duration) *requestTracker {
 	rt := &requestTracker{
 		C:              make(chan error, 1),
 		commandChan:    make(chan int, 100),
+		shutdownState:  running,
 		shutdownWait:   shutdownWait,
 		shutdownReason: &atomic.Value{},
 	}
@@ -74,8 +84,8 @@ has been marked down. The error is the one that was sent to the
 "Shutdown" method.
 */
 func (t *requestTracker) markedDown() error {
-	sd := atomic.LoadInt32(&t.shuttingDown)
-	if sd != 0 {
+	ss := atomic.LoadInt32(&t.shutdownState)
+	if ss != running {
 		reason := t.shutdownReason.Load().(*error)
 		if reason == nil {
 			return nil
@@ -93,6 +103,11 @@ as the result of the "start" call.
 func (t *requestTracker) shutdown(reason error) {
 	t.shutdownReason.Store(&reason)
 	t.commandChan <- shutdown
+}
+
+func (t *requestTracker) markDown() {
+	t.shutdownReason.Store(&ErrMarkedDown)
+	atomic.StoreInt32(&t.shutdownState, markedDown)
 }
 
 func (t *requestTracker) sendStop(sent bool) bool {
@@ -128,7 +143,7 @@ func (t *requestTracker) trackerLoop() {
 				}
 			case shutdown:
 				stopping = true
-				atomic.StoreInt32(&t.shuttingDown, 1)
+				atomic.StoreInt32(&t.shutdownState, shutDown)
 				if activeRequests <= 0 {
 					sentStop = t.sendStop(sentStop)
 				} else {

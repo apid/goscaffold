@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -121,6 +122,60 @@ var _ = Describe("Scaffold Tests", func() {
 		Eventually(func() bool {
 			return testGet(s, "")
 		}, time.Second).Should(BeFalse())
+	})
+
+	It("Markdown", func() {
+		var markedDown int32
+
+		s := CreateHTTPScaffold()
+		s.SetHealthPath("/health")
+		s.SetReadyPath("/ready")
+		s.SetMarkdown("POST", "/markdown", func() {
+			atomic.StoreInt32(&markedDown, 1)
+		})
+
+		stopChan := make(chan error)
+		err := s.Open()
+		Expect(err).Should(Succeed())
+
+		go func() {
+			listenErr := s.Listen(&testHandler{})
+			stopChan <- listenErr
+		}()
+
+		// Just make sure server is listening
+		Eventually(func() bool {
+			return testGet(s, "")
+		}, 5*time.Second).Should(BeTrue())
+
+		// Ensure that we are healthy and ready
+		code, _ := getText(fmt.Sprintf("http://%s/health", s.InsecureAddress()))
+		Expect(code).Should(Equal(200))
+		code, _ = getText(fmt.Sprintf("http://%s/ready", s.InsecureAddress()))
+		Expect(code).Should(Equal(200))
+
+		// Mark the server down, but don't stop it
+		resp, err := http.Post(fmt.Sprintf("http://%s/markdown", s.InsecureAddress()),
+			"text/plain", strings.NewReader("Goodbye!"))
+		Expect(err).Should(Succeed())
+		resp.Body.Close()
+		Expect(resp.StatusCode).Should(Equal(200))
+
+		// Server should immediately be marked down, not ready, but healthy
+		Expect(atomic.LoadInt32(&markedDown)).Should(BeEquivalentTo(1))
+		code, _ = getText(fmt.Sprintf("http://%s", s.InsecureAddress()))
+		Expect(code).Should(Equal(503))
+		code, _ = getText(fmt.Sprintf("http://%s/ready", s.InsecureAddress()))
+		Expect(code).Should(Equal(503))
+		code, _ = getText(fmt.Sprintf("http://%s/health", s.InsecureAddress()))
+		Expect(code).Should(Equal(200))
+
+		// Server should not have stopped yet
+		Consistently(stopChan).ShouldNot(Receive())
+
+		stopErr := errors.New("Test stop")
+		s.Shutdown(stopErr)
+		Eventually(stopChan).Should(Receive(Equal(stopErr)))
 	})
 
 	It("Health Check Functions", func() {

@@ -31,6 +31,11 @@ ErrManualStop is used when the user doesn't have a reason.
 var ErrManualStop = errors.New("Shutdown called")
 
 /*
+ErrMarkedDown is used after being marked down but before being shut down.
+*/
+var ErrMarkedDown = errors.New("Marked down")
+
+/*
 HealthStatus is a type of response from a health check.
 */
 type HealthStatus int
@@ -58,6 +63,15 @@ a reason for the status and will be placed in responses.
 type HealthChecker func() (HealthStatus, error)
 
 /*
+MarkdownHandler is a type of function that an user may implement in order to
+be notified when the server is marked down. The function may do anything
+it needs to do in response to a markdown request. However, markdown will
+proceed even if the function fails. In case the function takes a long time,
+the scaffold will always invoke it inside a new goroutine.
+*/
+type MarkdownHandler func()
+
+/*
 An HTTPScaffold provides a set of features on top of a standard HTTP
 listener. It includes an HTTP handler that may be plugged in to any
 standard Go HTTP server. It is intended to be placed before any other
@@ -73,6 +87,9 @@ type HTTPScaffold struct {
 	healthCheck        HealthChecker
 	healthPath         string
 	readyPath          string
+	markdownPath       string
+	markdownMethod     string
+	markdownHandler    MarkdownHandler
 }
 
 /*
@@ -152,6 +169,28 @@ systems like Kubernetes that will decide to shut down this server.
 */
 func (s *HTTPScaffold) SetReadyPath(p string) {
 	s.readyPath = p
+}
+
+/*
+SetMarkdown sets up a URI that will cause the server to mark it
+self down. However, this URI will not cause the server to actually shut
+down. Once any HTTP request is received on this path with a matching
+method, the server will be marked down. (the "readyPath" will respond
+with 503, and all other HTTP calls other than the "healthPath" will
+also respond with 503. The "healthPath" will still respond with 200.)
+If "handler" is not nil, the handler will be invoked and the API call
+will not return until the handler has returned. Because of that, the
+handler should return in a timely manner. (For instance, it should return
+in less than 30 seconds if Kubernetes is used unless the "grace period"
+is extended.)
+This makes this function the right thing to use
+as a "preStop" method in Kubernetes, so that the server can take action
+after shutdown to indicate that it has been deleted on purpose.
+*/
+func (s *HTTPScaffold) SetMarkdown(method, path string, handler MarkdownHandler) {
+	s.markdownPath = path
+	s.markdownMethod = method
+	s.markdownHandler = handler
 }
 
 /*

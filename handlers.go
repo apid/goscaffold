@@ -55,6 +55,9 @@ func (s *HTTPScaffold) createManagementHandler() *managementHandler {
 	if s.readyPath != "" {
 		h.mux.HandleFunc(s.readyPath, s.handleReady)
 	}
+	if s.markdownPath != "" {
+		h.mux.HandleFunc(s.markdownPath, s.handleMarkdown)
+	}
 	return h
 }
 
@@ -76,6 +79,11 @@ func (s *HTTPScaffold) callHealthCheck() (HealthStatus, error) {
 handleHealth only fails if the user's health check function tells us.
 */
 func (s *HTTPScaffold) handleHealth(resp http.ResponseWriter, req *http.Request) {
+	if req.Method != "GET" {
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
 	status, healthErr := s.callHealthCheck()
 
 	if status == Failed {
@@ -90,6 +98,11 @@ handleReady fails if we are marked down and also if the user's health function
 tells us.
 */
 func (s *HTTPScaffold) handleReady(resp http.ResponseWriter, req *http.Request) {
+	if req.Method != "GET" {
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
 	status, healthErr := s.callHealthCheck()
 	if status == OK {
 		healthErr = s.tracker.markedDown()
@@ -102,6 +115,22 @@ func (s *HTTPScaffold) handleReady(resp http.ResponseWriter, req *http.Request) 
 		resp.WriteHeader(http.StatusOK)
 	} else {
 		writeUnavailable(resp, req, status, healthErr)
+	}
+}
+
+/*
+handleMarkdown handles a request to mark down the server.
+*/
+func (s *HTTPScaffold) handleMarkdown(resp http.ResponseWriter, req *http.Request) {
+	if req.Method != s.markdownMethod {
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	req.Body.Close()
+	s.tracker.markDown()
+	if s.markdownHandler != nil {
+		s.markdownHandler()
 	}
 }
 
