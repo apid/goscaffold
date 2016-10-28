@@ -76,13 +76,13 @@ var _ = Describe("Scaffold Tests", func() {
 		s := CreateHTTPScaffold()
 		s.SetHealthPath("/health")
 		s.SetReadyPath("/ready")
-		stopChan := make(chan bool)
+		stopChan := make(chan error)
 		err := s.Open()
 		Expect(err).Should(Succeed())
 
 		go func() {
-			s.Listen(&testHandler{})
-			stopChan <- true
+			stopErr := s.Listen(&testHandler{})
+			stopChan <- stopErr
 		}()
 
 		go func() {
@@ -105,7 +105,8 @@ var _ = Describe("Scaffold Tests", func() {
 		Consistently(stopChan, 250*time.Millisecond).ShouldNot(Receive())
 
 		// Tell the server to try and exit
-		s.Shutdown(errors.New("Stop"))
+		stopErr := errors.New("Stop")
+		s.Shutdown(stopErr)
 
 		// Should take one second -- in the meantime, calls should fail with 503,
 		// health should be good, but ready should be bad
@@ -116,8 +117,14 @@ var _ = Describe("Scaffold Tests", func() {
 		code, _ = getText(fmt.Sprintf("http://%s/health", s.InsecureAddress()))
 		Expect(code).Should(Equal(200))
 
+		// Do a bunch more stops because we are funny that way.
+		// We just want to make sure that we don't hang if we stop a FEW times.
+		for i := 0; i < 25; i++ {
+			s.Shutdown(stopErr)
+		}
+
 		// But in less than two seconds, server should be down
-		Eventually(stopChan, 2*time.Second).Should(Receive(BeTrue()))
+		Eventually(stopChan, 2*time.Second).Should(Receive(Equal(stopErr)))
 		// Calls should now fail
 		Eventually(func() bool {
 			return testGet(s, "")
