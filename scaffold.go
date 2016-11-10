@@ -1,6 +1,7 @@
 package goscaffold
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -79,10 +80,12 @@ handlers.
 */
 type HTTPScaffold struct {
 	insecurePort       int
+	securePort         int
 	managementPort     int
 	open               bool
 	tracker            *requestTracker
 	insecureListener   net.Listener
+	secureListener     net.Listener
 	managementListener net.Listener
 	healthCheck        HealthChecker
 	healthPath         string
@@ -90,6 +93,9 @@ type HTTPScaffold struct {
 	markdownPath       string
 	markdownMethod     string
 	markdownHandler    MarkdownHandler
+	keyFile            string
+	keyPassFunc        func() []byte
+	certFile           string
 }
 
 /*
@@ -99,6 +105,7 @@ do nothing.
 func CreateHTTPScaffold() *HTTPScaffold {
 	return &HTTPScaffold{
 		insecurePort:   0,
+		securePort:     -1,
 		managementPort: -1,
 		open:           false,
 	}
@@ -114,6 +121,17 @@ func (s *HTTPScaffold) SetInsecurePort(ip int) {
 }
 
 /*
+SetSecurePort sets the port number to listen on in HTTPS mode.
+It may be set to zero, which indicates to listen on an ephemeral port.
+It must be called before Listen. It is an error to call
+Listen if this port is set and if the key and secret files are not also
+set.
+*/
+func (s *HTTPScaffold) SetSecurePort(ip int) {
+	s.securePort = ip
+}
+
+/*
 InsecureAddress returns the actual address (including the port if an
 ephemeral port was used) where we are listening. It must only be
 called after "Listen."
@@ -123,6 +141,18 @@ func (s *HTTPScaffold) InsecureAddress() string {
 		return ""
 	}
 	return s.insecureListener.Addr().String()
+}
+
+/*
+SecureAddress returns the actual address (including the port if an
+ephemeral port was used) where we are listening on HTTPS. It must only be
+called after "Listen."
+*/
+func (s *HTTPScaffold) SecureAddress() string {
+	if s.secureListener == nil {
+		return ""
+	}
+	return s.secureListener.Addr().String()
 }
 
 /*
@@ -144,6 +174,25 @@ func (s *HTTPScaffold) ManagementAddress() string {
 		return ""
 	}
 	return s.managementListener.Addr().String()
+}
+
+/*
+SetCertFile sets the name of the file that the server will read to get its
+own TLS certificate. It is only consulted if "securePort" is >= 0.
+*/
+func (s *HTTPScaffold) SetCertFile(fn string) {
+	s.certFile = fn
+}
+
+/*
+SetKeyFile sets the name of the file that the server will read to get its
+own TLS key. It is only consulted if "securePort" is >= 0.
+If "getPass" is non-null, then the function will be called at startup time
+to retrieve the password for the key file.
+*/
+func (s *HTTPScaffold) SetKeyFile(fn string, getPass func() []byte) {
+	s.keyFile = fn
+	s.keyPassFunc = getPass
 }
 
 /*
@@ -210,18 +259,45 @@ start to listen.
 func (s *HTTPScaffold) Open() error {
 	s.tracker = startRequestTracker(DefaultGraceTimeout)
 
-	il, err := net.ListenTCP("tcp", &net.TCPAddr{
-		Port: s.insecurePort,
-	})
-	if err != nil {
-		return err
-	}
-	s.insecureListener = il
-	defer func() {
-		if !s.open {
-			il.Close()
+	if s.insecurePort >= 0 {
+		il, err := net.ListenTCP("tcp", &net.TCPAddr{
+			Port: s.insecurePort,
+		})
+		if err != nil {
+			return err
 		}
-	}()
+		s.insecureListener = il
+		defer func() {
+			if !s.open {
+				il.Close()
+			}
+		}()
+	}
+
+	if s.securePort >= 0 {
+		if s.keyFile == "" || s.certFile == "" {
+			return errors.New("key and certificate files must be set")
+		}
+		cert, err := getCertificate(s.certFile, s.keyFile, s.keyPassFunc)
+		if err != nil {
+			return err
+		}
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+		sl, err := net.ListenTCP("tcp", &net.TCPAddr{
+			Port: s.securePort,
+		})
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if !s.open {
+				sl.Close()
+			}
+		}()
+		s.secureListener = tls.NewListener(sl, tlsConfig)
+	}
 
 	if s.managementPort >= 0 {
 		ml, err := net.ListenTCP("tcp", &net.TCPAddr{
@@ -286,11 +362,21 @@ func (s *HTTPScaffold) Listen(baseHandler http.Handler) error {
 		mainHandler = mgmtHandler
 	}
 
-	go http.Serve(s.insecureListener, mainHandler)
+	if s.insecureListener != nil {
+		go http.Serve(s.insecureListener, mainHandler)
+	}
+	if s.secureListener != nil {
+		go http.Serve(s.secureListener, mainHandler)
+	}
 
 	err := <-s.tracker.C
 
-	s.insecureListener.Close()
+	if s.insecureListener != nil {
+		s.insecureListener.Close()
+	}
+	if s.secureListener != nil {
+		s.secureListener.Close()
+	}
 	if s.managementListener != nil {
 		s.managementListener.Close()
 	}
