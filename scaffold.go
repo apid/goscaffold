@@ -94,7 +94,6 @@ type HTTPScaffold struct {
 	markdownMethod     string
 	markdownHandler    MarkdownHandler
 	keyFile            string
-	keyPassFunc        func() []byte
 	certFile           string
 }
 
@@ -190,9 +189,8 @@ own TLS key. It is only consulted if "securePort" is >= 0.
 If "getPass" is non-null, then the function will be called at startup time
 to retrieve the password for the key file.
 */
-func (s *HTTPScaffold) SetKeyFile(fn string, getPass func() []byte) {
+func (s *HTTPScaffold) SetKeyFile(fn string) {
 	s.keyFile = fn
-	s.keyPassFunc = getPass
 }
 
 /*
@@ -278,7 +276,7 @@ func (s *HTTPScaffold) Open() error {
 		if s.keyFile == "" || s.certFile == "" {
 			return errors.New("key and certificate files must be set")
 		}
-		cert, err := getCertificate(s.certFile, s.keyFile, s.keyPassFunc)
+		cert, err := tls.LoadX509KeyPair(s.certFile, s.keyFile)
 		if err != nil {
 			return err
 		}

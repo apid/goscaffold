@@ -279,7 +279,7 @@ var _ = Describe("Scaffold Tests", func() {
 	It("Secure And Insecure Ports", func() {
 		s := CreateHTTPScaffold()
 		s.SetSecurePort(0)
-		s.SetKeyFile("./testkeys/clearkey.pem", nil)
+		s.SetKeyFile("./testkeys/clearkey.pem")
 		s.SetCertFile("./testkeys/clearcert.pem")
 		stopChan := make(chan error)
 		err := s.Open()
@@ -309,7 +309,7 @@ var _ = Describe("Scaffold Tests", func() {
 		s := CreateHTTPScaffold()
 		s.SetSecurePort(0)
 		s.SetInsecurePort(-1)
-		s.SetKeyFile("./testkeys/clearkey.pem", nil)
+		s.SetKeyFile("./testkeys/clearkey.pem")
 		s.SetCertFile("./testkeys/clearcert.pem")
 		stopChan := make(chan error)
 		err := s.Open()
@@ -331,63 +331,6 @@ var _ = Describe("Scaffold Tests", func() {
 		shutdownErr := errors.New("Validate")
 		s.Shutdown(shutdownErr)
 		Eventually(stopChan).Should(Receive(Equal(shutdownErr)))
-	})
-
-	It("Secure Port Encrypted Key", func() {
-		s := CreateHTTPScaffold()
-		s.SetSecurePort(0)
-		s.SetInsecurePort(-1)
-		s.SetKeyFile("./testkeys/serverkey.pem", func() []byte {
-			return []byte("secure")
-		})
-		s.SetCertFile("./testkeys/servercert.pem")
-		stopChan := make(chan error)
-		err := s.Open()
-		Expect(err).Should(Succeed())
-		Expect(s.InsecureAddress()).Should(BeEmpty())
-
-		go func() {
-			fmt.Fprintf(GinkgoWriter, "Gonna listen on %s\n",
-				s.SecureAddress())
-			stopErr := s.Listen(&testHandler{})
-			fmt.Fprintf(GinkgoWriter, "Done listening\n")
-			stopChan <- stopErr
-		}()
-
-		Eventually(func() bool {
-			return testGetSecure(s, "")
-		}, 5*time.Second).Should(BeTrue())
-
-		shutdownErr := errors.New("Validate")
-		s.Shutdown(shutdownErr)
-		Eventually(stopChan).Should(Receive(Equal(shutdownErr)))
-	})
-
-	It("Read PEM files", func() {
-		_, t, err := decodePEM("./testkeys/clearkey.pem", nil)
-		Expect(err).Should(Succeed())
-		Expect(t).Should(Equal("RSA PRIVATE KEY"))
-		_, t, err = decodePEM("./testkeys/clearcert.pem", nil)
-		Expect(err).Should(Succeed())
-		Expect(t).Should(Equal("CERTIFICATE"))
-		_, err = getCertificate("./testkeys/clearcert.pem", "./testkeys/clearkey.pem", nil)
-		Expect(err).Should(Succeed())
-
-		_, _, err = decodePEM("./testkeys/servercert.pem", nil)
-		Expect(err).Should(Succeed())
-		_, _, err = decodePEM("./testkeys/serverkey.pem", nil)
-		Expect(err).ShouldNot(Succeed())
-		_, _, err = decodePEM("./testkeys/serverkey.pem", func() []byte {
-			return []byte("notsecure")
-		})
-		Expect(err).ShouldNot(Succeed())
-		_, _, err = decodePEM("./testkeys/serverkey.pem", func() []byte {
-			return []byte("secure")
-		})
-		Expect(err).Should(Succeed())
-		_, err = getCertificate("./testkeys/servercert.pem", "./testkeys/serverkey.pem", func() []byte {
-			return []byte("notsecure")
-		})
 	})
 })
 
