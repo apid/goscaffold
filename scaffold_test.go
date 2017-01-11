@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -26,6 +27,7 @@ var insecureClient = &http.Client{
 var _ = Describe("Scaffold Tests", func() {
 	It("Validate framework", func() {
 		s := CreateHTTPScaffold()
+		s.SetlocalBindIPAddressV4(GetLocalIP())
 		stopChan := make(chan error)
 		err := s.Open()
 		Expect(err).Should(Succeed())
@@ -51,6 +53,7 @@ var _ = Describe("Scaffold Tests", func() {
 
 	It("Separate management port", func() {
 		s := CreateHTTPScaffold()
+		s.SetlocalBindIPAddressV4(GetLocalIP())
 		s.SetManagementPort(0)
 		stopChan := make(chan error)
 		err := s.Open()
@@ -209,6 +212,7 @@ var _ = Describe("Scaffold Tests", func() {
 		}
 
 		s := CreateHTTPScaffold()
+		s.SetlocalBindIPAddressV4(GetLocalIP())
 		s.SetManagementPort(0)
 		s.SetHealthPath("/health")
 		s.SetReadyPath("/ready")
@@ -332,6 +336,32 @@ var _ = Describe("Scaffold Tests", func() {
 		s.Shutdown(shutdownErr)
 		Eventually(stopChan).Should(Receive(Equal(shutdownErr)))
 	})
+
+	It("DisAllow non-localhost", func() {
+		s := CreateHTTPScaffold()
+		s.SetInsecurePort(8181)
+		s.SetlocalBindIPAddressV4([]byte{127, 0, 0, 1})
+		stopChan := make(chan error)
+		err := s.Open()
+		Expect(err).Should(Succeed())
+
+		go func() {
+			fmt.Fprintf(GinkgoWriter, "Gonna listen on %s\n", s.InsecureAddress())
+			stopErr := s.Listen(&testHandler{})
+			fmt.Fprintf(GinkgoWriter, "Done listening\n")
+			stopChan <- stopErr
+		}()
+
+		Eventually(func() bool {
+			return testGet(s, "")
+		}, 5*time.Second).Should(BeTrue())
+		_, err = http.Get(fmt.Sprintf("http://%s:%s", GetLocalIPStr(), "8181"))
+		Expect(err).ShouldNot(Succeed())
+		shutdownErr := errors.New("Validate")
+		s.Shutdown(shutdownErr)
+		Eventually(stopChan).Should(Receive(Equal(shutdownErr)))
+
+	})
 })
 
 func getText(url string) (int, string) {
@@ -408,4 +438,34 @@ func (h *testHandler) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 	if delayTime > 0 {
 		time.Sleep(delayTime)
 	}
+}
+
+func GetLocalIP() []byte {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP
+			}
+		}
+	}
+	return nil
+}
+
+func GetLocalIPStr() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return ""
 }

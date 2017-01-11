@@ -83,6 +83,7 @@ type HTTPScaffold struct {
 	securePort         int
 	managementPort     int
 	open               bool
+	ipAddr             net.IP
 	tracker            *requestTracker
 	insecureListener   net.Listener
 	secureListener     net.Listener
@@ -106,8 +107,17 @@ func CreateHTTPScaffold() *HTTPScaffold {
 		insecurePort:   0,
 		securePort:     -1,
 		managementPort: -1,
+		ipAddr:         []byte{0, 0, 0, 0},
 		open:           false,
 	}
+}
+
+/*
+SetlocalBindIPAddressV4 seta the IP address (IP V4) for the service to
+bind on to listen on. If none set, all IP addesses would be accepted.
+*/
+func (s *HTTPScaffold) SetlocalBindIPAddressV4(ip net.IP) {
+	s.ipAddr = ip
 }
 
 /*
@@ -115,8 +125,8 @@ SetInsecurePort sets the port number to listen on in regular "HTTP" mode.
 It may be set to zero, which indicates to listen on an ephemeral port.
 It must be called before "listen".
 */
-func (s *HTTPScaffold) SetInsecurePort(ip int) {
-	s.insecurePort = ip
+func (s *HTTPScaffold) SetInsecurePort(port int) {
+	s.insecurePort = port
 }
 
 /*
@@ -126,8 +136,8 @@ It must be called before Listen. It is an error to call
 Listen if this port is set and if the key and secret files are not also
 set.
 */
-func (s *HTTPScaffold) SetSecurePort(ip int) {
-	s.securePort = ip
+func (s *HTTPScaffold) SetSecurePort(port int) {
+	s.securePort = port
 }
 
 /*
@@ -259,6 +269,7 @@ func (s *HTTPScaffold) Open() error {
 
 	if s.insecurePort >= 0 {
 		il, err := net.ListenTCP("tcp", &net.TCPAddr{
+			IP:   s.ipAddr,
 			Port: s.insecurePort,
 		})
 		if err != nil {
@@ -284,6 +295,7 @@ func (s *HTTPScaffold) Open() error {
 			Certificates: []tls.Certificate{cert},
 		}
 		sl, err := net.ListenTCP("tcp", &net.TCPAddr{
+			IP:   s.ipAddr,
 			Port: s.securePort,
 		})
 		if err != nil {
@@ -299,6 +311,7 @@ func (s *HTTPScaffold) Open() error {
 
 	if s.managementPort >= 0 {
 		ml, err := net.ListenTCP("tcp", &net.TCPAddr{
+			IP:   s.ipAddr,
 			Port: s.managementPort,
 		})
 		if err != nil {
