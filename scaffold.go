@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -433,15 +434,26 @@ three signals. SIGINT (aka control-C) and SIGTERM (what "kill" sends by default)
 will cause the program to be marked down, and "SignalCaught" will be returned
 by the "Listen" method. SIGHUP ("kill -1" or "kill -HUP") will cause the
 stack trace of all the threads to be printed to stderr, just like a Java program.
+This method is very simplistic -- it starts listening every time that
+you call it. So a program should only call it once.
 */
 func (s *HTTPScaffold) CatchSignals() {
-	sigChan := make(chan os.Signal, 1)
+	s.CatchSignalsTo(os.Stderr)
+}
+
+/*
+CatchSignalsTo is just like CatchSignals, but it captures the stack trace
+to the specified writer rather than to os.Stderr. This is handy for testing.
+*/
+func (s *HTTPScaffold) CatchSignalsTo(out io.Writer) {
+	sigChan := make(chan os.Signal, 10)
 	signal.Notify(sigChan, syscall.SIGINT)
 	signal.Notify(sigChan, syscall.SIGTERM)
 	signal.Notify(sigChan, syscall.SIGHUP)
 
 	go func() {
 		for {
+			fmt.Printf("Listening for signals\n")
 			sig := <-sigChan
 			switch sig {
 			case syscall.SIGINT, syscall.SIGTERM:
@@ -449,24 +461,27 @@ func (s *HTTPScaffold) CatchSignals() {
 				signal.Reset()
 				return
 			case syscall.SIGHUP:
-				dumpStack()
+				dumpStack(out)
 			}
 		}
 	}()
 }
 
-func dumpStack() {
-	stackSize := 32767
+func dumpStack(out io.Writer) {
+	fmt.Printf("Got HUP\n")
+	stackSize := 4096
 	stackBuf := make([]byte, stackSize)
 	var w int
 
-	for w < stackSize {
+	for {
 		w = runtime.Stack(stackBuf, true)
 		if w == stackSize {
 			stackSize *= 2
 			stackBuf = make([]byte, stackSize)
+		} else {
+			break
 		}
 	}
 
-	fmt.Fprint(os.Stderr, string(stackBuf[:w]))
+	fmt.Fprint(out, string(stackBuf[:w]))
 }
