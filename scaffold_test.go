@@ -1,6 +1,7 @@
 package goscaffold
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -46,6 +47,7 @@ var _ = Describe("Scaffold Tests", func() {
 		Expect(err).Should(Succeed())
 		resp.Body.Close()
 		Expect(resp.StatusCode).Should(Equal(200))
+		validatePprof(s.InsecureAddress())
 		shutdownErr := errors.New("Validate")
 		s.Shutdown(shutdownErr)
 		Eventually(stopChan).Should(Receive(Equal(shutdownErr)))
@@ -79,6 +81,7 @@ var _ = Describe("Scaffold Tests", func() {
 		Expect(err).Should(Succeed())
 		resp.Body.Close()
 		Expect(resp.StatusCode).Should(Equal(404))
+		validatePprof(s.ManagementAddress())
 		shutdownErr := errors.New("Validate")
 		s.Shutdown(shutdownErr)
 		Eventually(stopChan).Should(Receive(Equal(shutdownErr)))
@@ -362,6 +365,12 @@ var _ = Describe("Scaffold Tests", func() {
 		Eventually(stopChan).Should(Receive(Equal(shutdownErr)))
 
 	})
+
+	It("Get stack trace", func() {
+		b := &bytes.Buffer{}
+		dumpStack(b)
+		Expect(b.Len()).ShouldNot(BeZero())
+	})
 })
 
 func getText(url string) (int, string) {
@@ -389,6 +398,14 @@ func getJSON(url string) (int, map[string]string) {
 	err = json.Unmarshal(bod, &vals)
 	Expect(err).Should(Succeed())
 	return resp.StatusCode, vals
+}
+
+func validatePprof(addr string) {
+	code, _ := getText(fmt.Sprintf("http://%s/debug/pprof/", addr))
+	Expect(code).Should(Equal(200))
+	code, cmdline := getText(fmt.Sprintf("http://%s/debug/pprof/cmdline", addr))
+	Expect(code).Should(Equal(200))
+	Expect(cmdline).ShouldNot(BeEmpty())
 }
 
 func testGet(s *HTTPScaffold, path string) bool {

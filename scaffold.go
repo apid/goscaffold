@@ -453,7 +453,6 @@ func (s *HTTPScaffold) CatchSignalsTo(out io.Writer) {
 
 	go func() {
 		for {
-			fmt.Printf("Listening for signals\n")
 			sig := <-sigChan
 			switch sig {
 			case syscall.SIGINT, syscall.SIGTERM:
@@ -468,7 +467,6 @@ func (s *HTTPScaffold) CatchSignalsTo(out io.Writer) {
 }
 
 func dumpStack(out io.Writer) {
-	fmt.Printf("Got HUP\n")
 	stackSize := 4096
 	stackBuf := make([]byte, stackSize)
 	var w int
