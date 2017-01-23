@@ -95,8 +95,8 @@ type HTTPScaffold struct {
 	markdownPath       string
 	markdownMethod     string
 	markdownHandler    MarkdownHandler
-	keyFile            string
 	certFile           string
+	keyFile            string
 }
 
 /*

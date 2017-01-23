@@ -2,13 +2,20 @@ package goscaffold
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"github.com/SermoDigital/jose/crypto"
 	"github.com/SermoDigital/jose/jws"
-	"github.com/SermoDigital/jose/jwt"
 	"github.com/julienschmidt/httprouter"
 	"github.com/justinas/alice"
 	"net/http"
+	"sync"
+	"time"
+)
+
+var (
+	gPkey   *rsa.PublicKey
+	rwMutex sync.RWMutex
 )
 
 const params = "params"
@@ -33,8 +40,6 @@ OAuth structure that provides http connection to the URL that has the public
 key for verifying the JWT token
 */
 type OAuth struct {
-	keyURL string
-	client *http.Client
 }
 
 /*
@@ -44,6 +49,29 @@ wishes to validate against (via SSOHandler).
 */
 type OAuthService interface {
 	SSOHandler(p string, h func(http.ResponseWriter, *http.Request)) (string, httprouter.Handle)
+}
+
+/*
+CreateOAuth is a constructor that creates OAuth for OAuthService
+interface. OAuthService interface offers method:-
+(1) SSOHandler(): Offers the user to attach http handler for JWT
+verification.
+*/
+func (s *HTTPScaffold) CreateOAuth(keyURL string) OAuthService {
+
+	pk, err := getPubicKey(keyURL)
+	if err != nil {
+		panic("Unable to retreive Public Key")
+	}
+	setPkSafe(pk)
+	/*
+	  Routine that will fetch & update the public keys in the global
+	  variable periodically
+	*/
+	updatePulicKeysPeriodic(keyURL)
+
+	return &OAuth{}
+
 }
 
 /*
@@ -85,7 +113,7 @@ func (a *OAuth) VerifyOAuth(next http.Handler) httprouter.Handle {
 		}
 
 		/* Validate the JWT */
-		err = a.Validate(jwt)
+		err = jwt.Validate(getPkSafe(), crypto.SigningMethodRS256)
 		if err != nil {
 			WriteErrorResponse(http.StatusBadRequest, err.Error(), rw)
 			return
@@ -96,34 +124,6 @@ func (a *OAuth) VerifyOAuth(next http.Handler) httprouter.Handle {
 		next.ServeHTTP(rw, r)
 	}
 
-}
-
-/*
-ValidateKey validate the jwt and return an error if it fails
-*/
-func (a *OAuth) Validate(jwt jwt.JWT) error {
-
-	r, err := a.client.Get(a.keyURL)
-
-	if err != nil {
-		return err
-	}
-
-	defer r.Body.Close()
-	ssoKey := &ssoKey{}
-	err = json.NewDecoder(r.Body).Decode(ssoKey)
-	if err != nil {
-		return err
-	}
-
-	/* Retrieve the Public Key */
-	publieKey, err := crypto.ParseRSAPublicKeyFromPEM([]byte(ssoKey.Value))
-	if err != nil {
-		return err
-	}
-
-	/* Return the status of validation */
-	return jwt.Validate(publieKey, crypto.SigningMethodRS256)
 }
 
 /*
@@ -141,4 +141,73 @@ func WriteErrorResponses(statusCode int, errors Errors, w http.ResponseWriter) {
 	w.WriteHeader(statusCode)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(errors)
+}
+
+/*
+updatePulicKeysPeriodic updates the cache periodically (every day)
+*/
+func updatePulicKeysPeriodic(keyURL string) {
+
+	ticker := time.NewTicker(24 * 3600 * time.Second)
+	quit := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				pk, err := getPubicKey(keyURL)
+				if err == nil {
+					setPkSafe(pk)
+				}
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+}
+
+/*
+getPubicKey: Loads the Public key in to memory and returns it.
+*/
+func getPubicKey(keyURL string) (*rsa.PublicKey, error) {
+
+	client := &http.Client{}
+	r, err := client.Get(keyURL)
+	if err != nil {
+		return nil, err
+	}
+
+	defer r.Body.Close()
+	ssoKey := &ssoKey{}
+	err = json.NewDecoder(r.Body).Decode(ssoKey)
+	if err != nil {
+		return nil, err
+	}
+
+	/* Retrieve the Public Key */
+	publicKey, err := crypto.ParseRSAPublicKeyFromPEM([]byte(ssoKey.Value))
+	if err != nil {
+		return nil, err
+	}
+	return publicKey, nil
+
+}
+
+/*
+setPkSafe Safely stores the Public Key (via a Write Lock)
+*/
+func setPkSafe(pk *rsa.PublicKey) {
+	rwMutex.Lock()
+	gPkey = pk
+	rwMutex.Unlock()
+}
+
+/*
+getPkSafe returns the stored key (via a read lock)
+*/
+func getPkSafe() *rsa.PublicKey {
+	rwMutex.RLock()
+	pk := gPkey
+	rwMutex.RUnlock()
+	return pk
 }
