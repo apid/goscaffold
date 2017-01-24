@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	gPkey   *rsa.PublicKey
+	gPkey   *rsa.PublicKey = nil
 	rwMutex sync.RWMutex
 )
 
@@ -59,16 +59,14 @@ verification.
 */
 func (s *HTTPScaffold) CreateOAuth(keyURL string) OAuthService {
 
-	pk, err := getPubicKey(keyURL)
+	pk, err := getPublicKey(keyURL)
 	if err != nil {
-		panic("Unable to retreive Public Key")
+		setPkSafe(pk)
 	}
-	setPkSafe(pk)
 	/*
-	  Routine that will fetch & update the public keys in the global
-	  variable periodically
+	  Routine that will fetch & update the public keys in safe manner
 	*/
-	updatePulicKeysPeriodic(keyURL)
+	updatePublicKeysPeriodic(keyURL)
 
 	return &OAuth{}
 
@@ -106,20 +104,28 @@ func (a *OAuth) VerifyOAuth(next http.Handler) httprouter.Handle {
 
 	return func(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 
+		/* Parse the JWT from the input request */
 		jwt, err := jws.ParseJWTFromRequest(r)
 		if err != nil {
 			WriteErrorResponse(http.StatusBadRequest, err.Error(), rw)
 			return
 		}
 
-		/* Validate the JWT */
-		err = jwt.Validate(getPkSafe(), crypto.SigningMethodRS256)
+		/* Get the pulic key from cache */
+		pk := getPkSafe()
+		if pk == nil {
+			WriteErrorResponse(http.StatusBadRequest, "Public key not configured. Validation failed.", rw)
+			return
+		}
+
+		/* Validate the token */
+		err = jwt.Validate(pk, crypto.SigningMethodRS256)
 		if err != nil {
 			WriteErrorResponse(http.StatusBadRequest, err.Error(), rw)
 			return
 		}
 
-		/* Set the params in the request */
+		/* Set the input params in the request */
 		r = SetParamsInRequest(r, ps)
 		next.ServeHTTP(rw, r)
 	}
@@ -144,17 +150,17 @@ func WriteErrorResponses(statusCode int, errors Errors, w http.ResponseWriter) {
 }
 
 /*
-updatePulicKeysPeriodic updates the cache periodically (every day)
+updatePulicKeysPeriodic updates the cache periodically (every hour)
 */
-func updatePulicKeysPeriodic(keyURL string) {
+func updatePublicKeysPeriodic(keyURL string) {
 
-	ticker := time.NewTicker(24 * 3600 * time.Second)
+	ticker := time.NewTicker(3600 * time.Second)
 	quit := make(chan struct{})
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
-				pk, err := getPubicKey(keyURL)
+				pk, err := getPublicKey(keyURL)
 				if err == nil {
 					setPkSafe(pk)
 				}
@@ -169,22 +175,26 @@ func updatePulicKeysPeriodic(keyURL string) {
 /*
 getPubicKey: Loads the Public key in to memory and returns it.
 */
-func getPubicKey(keyURL string) (*rsa.PublicKey, error) {
+func getPublicKey(keyURL string) (*rsa.PublicKey, error) {
 
 	client := &http.Client{}
+
+	/* Connect to the server to fetch Key details */
 	r, err := client.Get(keyURL)
 	if err != nil {
 		return nil, err
 	}
 
 	defer r.Body.Close()
+
+	/* Decode the SSO Key */
 	ssoKey := &ssoKey{}
 	err = json.NewDecoder(r.Body).Decode(ssoKey)
 	if err != nil {
 		return nil, err
 	}
 
-	/* Retrieve the Public Key */
+	/* Retrieve the Public Key from SSO Key */
 	publicKey, err := crypto.ParseRSAPublicKeyFromPEM([]byte(ssoKey.Value))
 	if err != nil {
 		return nil, err
