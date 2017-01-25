@@ -1,6 +1,16 @@
-hash: 9b96c783f272b0a712add71d2d753d1eb07ba91dfe9b42e3532b8d3e3cec639c
-updated: 2016-12-16T16:08:14.415655665-08:00
-imports: []
+hash: f295b6c2454813dff2e01afc69d751c108a60e5ca9c4d9907cb178000164a797
+updated: 2017-01-25T22:43:30.054011881Z
+imports:
+- name: github.com/julienschmidt/httprouter
+  version: 8c199fb6259ffc1af525cc3ad52ee60ba8359669
+- name: github.com/justinas/alice
+  version: 1051eaf52fcafdd87ead59d28b065f1fcb8274ec
+- name: github.com/SermoDigital/jose
+  version: 2bd9b81ac51d6d6134fcd4fd846bd2e7347a15f9
+  subpackages:
+  - crypto
+  - jws
+  - jwt
 testImports:
 - name: github.com/onsi/ginkgo
   version: 45a5f6ffb2a14e4f29698c16ae4c0a34018a8951

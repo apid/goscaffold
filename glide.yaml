@@ -1,4 +1,10 @@
 package: github.com/30x/go-scaffold
+import:
+- package: github.com/SermoDigital/jose
+  subpackages:
+  - crypto
+  - jwt
+- package: github.com/justinas/alice
 testImport:
 - package: github.com/onsi/ginkgo
 - package: github.com/onsi/gomega
