@@ -154,7 +154,7 @@ updatePulicKeysPeriodic updates the cache periodically (every hour)
 */
 func updatePublicKeysPeriodic(keyURL string) {
 
-	ticker := time.NewTicker(3600 * time.Second)
+	ticker := time.NewTicker(time.Hour)
 	quit := make(chan struct{})
 	go func() {
 		for {
@@ -177,10 +177,8 @@ getPubicKey: Loads the Public key in to memory and returns it.
 */
 func getPublicKey(keyURL string) (*rsa.PublicKey, error) {
 
-	client := &http.Client{}
-
 	/* Connect to the server to fetch Key details */
-	r, err := client.Get(keyURL)
+	r, err := http.Get(keyURL)
 	if err != nil {
 		return nil, err
 	}
