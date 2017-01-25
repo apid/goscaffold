@@ -6,15 +6,23 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/julienschmidt/httprouter"
 	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+)
+
+var (
+	dbURL  string
+	ssoURL string
+	bToken string
 )
 
 var insecureClient = &http.Client{
@@ -24,6 +32,21 @@ var insecureClient = &http.Client{
 		},
 	},
 }
+var _ = BeforeSuite(func() {
+	ssoURL = os.Getenv("TEST_SSO_URL")
+	bToken = os.Getenv("BEARER_JWT_TOKEN")
+	if ssoURL == "" || bToken == "" {
+		fmt.Println("Tests aborted: TEST_SSO_URL/BEARER_JWT_TOKEN not set\n")
+		fmt.Println("Example:")
+		fmt.Println("TEST_SSO_URL=https://login.e2e.apigee.net/token_key")
+		fmt.Println("BEARER_JWT_TOKEN=eyJhbGciOiJSUzI1NiJ9.eyJqdGkiOiIwMDgwNWNlYi0yNzI5LTQ2OTgtYWNiMy1jNTRkZmIzMWM4MjEiLCJzdWIiO\n")
+		fmt.Println("NOTE:-")
+		fmt.Println("BEARER_JWT_TOKEN can be gotten by `get_token -u sramamoorthy+edgetest@apigee.com:Test12345`")
+		fmt.Println("get_token download details are at https://apigeesc.atlassian.net/wiki/display/EH/get_token\n")
+		Fail("Please set Environment variables as expected")
+	}
+
+})
 
 var _ = Describe("Scaffold Tests", func() {
 	It("Validate framework", func() {
@@ -366,12 +389,69 @@ var _ = Describe("Scaffold Tests", func() {
 
 	})
 
+	It("SSO handler validation", func() {
+		router := httprouter.New()
+		Expect(router).ShouldNot(BeNil())
+		scaf := CreateHTTPScaffold()
+		Expect(scaf).ShouldNot(BeNil())
+		err := scaf.Open()
+		Expect(err).Should(Succeed())
+		oauth := scaf.CreateOAuth(ssoURL)
+		Expect(oauth).ShouldNot(BeNil())
+		go func() {
+			fmt.Fprintf(GinkgoWriter, "Gonna listen on %s\n", scaf.InsecureAddress())
+			router.GET(oauth.SSOHandler("/foobar/:param1/:param2", buslogicHandler))
+			scaf.Listen(router)
+		}()
+		Eventually(func() bool {
+			req, err := http.NewRequest("GET",
+				"http://"+scaf.InsecureAddress()+"/foobar/xyz/123", nil)
+			if err != nil {
+				return false
+			}
+			req.Header.Set("Authorization", "Bearer "+bToken)
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			Expect(err).Should(Succeed())
+			defer resp.Body.Close()
+			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+
+			return true
+		}, 1*time.Second).Should(BeTrue())
+
+		Eventually(func() bool {
+			req, err := http.NewRequest("GET",
+				"http://"+scaf.InsecureAddress()+"/foobar/xyz/123", nil)
+			if err != nil {
+				return false
+			}
+			req.Header.Set("Authorization", "Bearer DEADBEEF")
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			Expect(err).Should(Succeed())
+			defer resp.Body.Close()
+			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+
+			return true
+		}, 1*time.Second).Should(BeTrue())
+
+	})
+
 	It("Get stack trace", func() {
 		b := &bytes.Buffer{}
 		dumpStack(b)
 		Expect(b.Len()).ShouldNot(BeZero())
 	})
+
 })
+
+func buslogicHandler(w http.ResponseWriter, r *http.Request) {
+	p := FetchParams(r)
+	cid := p.ByName("param1")
+	Expect(cid).To(Equal("xyz"))
+	cid = p.ByName("param2")
+	Expect(cid).To(Equal("123"))
+}
 
 func getText(url string) (int, string) {
 	req, err := http.NewRequest("GET", url, nil)

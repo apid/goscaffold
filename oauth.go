@@ -60,12 +60,12 @@ verification.
 func (s *HTTPScaffold) CreateOAuth(keyURL string) OAuthService {
 
 	pk, err := getPublicKey(keyURL)
-	if err != nil {
+	if err == nil {
 		setPkSafe(pk)
 	}
 	/*
-	  Routine that will fetch & update the public keys in safe manner
-	*/
+	 * Routine that will fetch & update the public keys in safe manner
+	 */
 	updatePublicKeysPeriodic(keyURL)
 
 	return &OAuth{}
