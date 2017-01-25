@@ -41,8 +41,8 @@ var _ = BeforeSuite(func() {
 		fmt.Println("TEST_SSO_URL=https://login.e2e.apigee.net/token_key")
 		fmt.Println("BEARER_JWT_TOKEN=eyJhbGciOiJSUzI1NiJ9.eyJqdGkiOiIwMDgwNWNlYi0yNzI5LTQ2OTgtYWNiMy1jNTRkZmIzMWM4MjEiLCJzdWIiO\n")
 		fmt.Println("NOTE:-")
-		fmt.Println("BEARER_JWT_TOKEN can be gotten by `get_token -u sramamoorthy+edgetest@apigee.com:Test12345`")
-		fmt.Println("get_token download/setup details are at https://apigeesc.atlassian.net/wiki/display/EH/get_token\n")
+		fmt.Println("BEARER_JWT_TOKEN can be gotten by `get_token -u user@apigee.com:password`")
+		fmt.Println("get_token download, SSO_LOGIN_URL setup details are at https://apigeesc.atlassian.net/wiki/display/EH/get_token\n")
 		Fail("Please set Environment variables as expected")
 	}
 
