@@ -6,23 +6,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/julienschmidt/httprouter"
 	"io/ioutil"
 	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/SermoDigital/jose/crypto"
+	"github.com/SermoDigital/jose/jws"
+	"github.com/julienschmidt/httprouter"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
+const (
+	validJWTSigner   = "https://raw.githubusercontent.com/30x/goscaffold/master/testkeys/jwtcert.json"
+	invalidJWTSigner = "https://raw.githubusercontent.com/30x/goscaffold/master/testkeys/notfound.json"
+)
+
 var (
-	dbURL  string
-	ssoURL string
-	bToken string
+	dbURL string
 )
 
 var insecureClient = &http.Client{
@@ -32,21 +37,6 @@ var insecureClient = &http.Client{
 		},
 	},
 }
-var _ = BeforeSuite(func() {
-	ssoURL = os.Getenv("TEST_SSO_URL")
-	bToken = os.Getenv("BEARER_JWT_TOKEN")
-	if ssoURL == "" || bToken == "" {
-		fmt.Println("Tests aborted: TEST_SSO_URL/BEARER_JWT_TOKEN not set\n")
-		fmt.Println("Example:")
-		fmt.Println("TEST_SSO_URL=https://login.e2e.apigee.net/token_key")
-		fmt.Println("BEARER_JWT_TOKEN=eyJhbGciOiJSUzI1NiJ9.eyJqdGkiOiIwMDgwNWNlYi0yNzI5LTQ2OTgtYWNiMy1jNTRkZmIzMWM4MjEiLCJzdWIiO\n")
-		fmt.Println("NOTE:-")
-		fmt.Println("BEARER_JWT_TOKEN can be gotten by `get_token -u user@apigee.com:password`")
-		fmt.Println("get_token download, SSO_LOGIN_URL setup details are at https://apigeesc.atlassian.net/wiki/display/EH/get_token\n")
-		Fail("Please set Environment variables as expected")
-	}
-
-})
 
 var _ = Describe("Scaffold Tests", func() {
 	It("Validate framework", func() {
@@ -396,45 +386,61 @@ var _ = Describe("Scaffold Tests", func() {
 		Expect(scaf).ShouldNot(BeNil())
 		err := scaf.Open()
 		Expect(err).Should(Succeed())
-		oauth := scaf.CreateOAuth(ssoURL)
+		oauth := scaf.CreateOAuth(validJWTSigner)
 		Expect(oauth).ShouldNot(BeNil())
 		go func() {
 			fmt.Fprintf(GinkgoWriter, "Gonna listen on %s\n", scaf.InsecureAddress())
 			router.GET(oauth.SSOHandler("/foobar/:param1/:param2", buslogicHandler))
 			scaf.Listen(router)
 		}()
-		Eventually(func() bool {
-			req, err := http.NewRequest("GET",
+
+		Eventually(func() int {
+			req, reqerr := http.NewRequest("GET",
 				"http://"+scaf.InsecureAddress()+"/foobar/xyz/123", nil)
-			if err != nil {
-				return false
-			}
-			req.Header.Set("Authorization", "Bearer "+bToken)
+			Expect(reqerr).Should(Succeed())
+			req.Header.Set("Authorization", "Bearer "+string(createJWT()))
 			client := &http.Client{}
-			resp, err := client.Do(req)
-			Expect(err).Should(Succeed())
+			resp, reqerr := client.Do(req)
+			Expect(reqerr).Should(Succeed())
 			defer resp.Body.Close()
-			Expect(resp.StatusCode).To(Equal(http.StatusOK))
+			return resp.StatusCode
+		}, 2*time.Second).Should(Equal(200))
 
-			return true
-		}, 1*time.Second).Should(BeTrue())
+		req, err := http.NewRequest("GET",
+			"http://"+scaf.InsecureAddress()+"/foobar/xyz/123", nil)
+		Expect(err).Should(Succeed())
+		req.Header.Set("Authorization", "Bearer DEADBEEF")
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		Expect(err).Should(Succeed())
+		defer resp.Body.Close()
+		Expect(resp.StatusCode).Should(Equal(400))
+	})
 
-		Eventually(func() bool {
-			req, err := http.NewRequest("GET",
-				"http://"+scaf.InsecureAddress()+"/foobar/xyz/123", nil)
-			if err != nil {
-				return false
-			}
-			req.Header.Set("Authorization", "Bearer DEADBEEF")
-			client := &http.Client{}
-			resp, err := client.Do(req)
-			Expect(err).Should(Succeed())
-			defer resp.Body.Close()
-			Expect(resp.StatusCode).To(Equal(http.StatusBadRequest))
+	It("SSO handler validation bad public key", func() {
+		router := httprouter.New()
+		Expect(router).ShouldNot(BeNil())
+		scaf := CreateHTTPScaffold()
+		Expect(scaf).ShouldNot(BeNil())
+		err := scaf.Open()
+		Expect(err).Should(Succeed())
+		oauth := scaf.CreateOAuth(invalidJWTSigner)
+		Expect(oauth).ShouldNot(BeNil())
+		go func() {
+			fmt.Fprintf(GinkgoWriter, "Gonna listen on %s\n", scaf.InsecureAddress())
+			router.GET(oauth.SSOHandler("/foobar/:param1/:param2", buslogicHandler))
+			scaf.Listen(router)
+		}()
 
-			return true
-		}, 1*time.Second).Should(BeTrue())
-
+		req, err := http.NewRequest("GET",
+			"http://"+scaf.InsecureAddress()+"/foobar/xyz/123", nil)
+		Expect(err).Should(Succeed())
+		req.Header.Set("Authorization", "Bearer "+string(createJWT()))
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		Expect(err).Should(Succeed())
+		defer resp.Body.Close()
+		Expect(resp.StatusCode).Should(Equal(400))
 	})
 
 	It("Get stack trace", func() {
@@ -443,6 +449,22 @@ var _ = Describe("Scaffold Tests", func() {
 		Expect(b.Len()).ShouldNot(BeZero())
 	})
 
+	It("Verify JWT creation", func() {
+		// Ensure that our logic in this test for creating a JWT really works
+		jwt := createJWT()
+		fmt.Fprintf(GinkgoWriter, "JWT: %s\n", string(jwt))
+
+		certBytes, err := ioutil.ReadFile("./testkeys/jwtcert.pem")
+		Expect(err).Should(Succeed())
+		cert, err := crypto.ParseRSAPublicKeyFromPEM(certBytes)
+		Expect(err).Should(Succeed())
+
+		parsedJwt, err := jws.ParseJWT(jwt)
+		Expect(err).Should(Succeed())
+
+		err = parsedJwt.Validate(cert, crypto.SigningMethodRS256)
+		Expect(err).Should(Succeed())
+	})
 })
 
 func buslogicHandler(w http.ResponseWriter, r *http.Request) {
@@ -565,4 +587,25 @@ func GetLocalIPStr() string {
 		}
 	}
 	return ""
+}
+
+func createJWT() []byte {
+	keyBytes, err := ioutil.ReadFile("./testkeys/jwtkey.pem")
+	Expect(err).Should(Succeed())
+	pk, err := crypto.ParseRSAPrivateKeyFromPEM(keyBytes)
+	Expect(err).Should(Succeed())
+
+	claims := jws.Claims{}
+	now := time.Now()
+	claims.SetAudience("http://github.com/30x/goscaffold")
+	claims.SetIssuer("http://github.com/30x/goscaffold")
+	claims.SetSubject("http://github.com/30x/goscaffold")
+	claims.SetIssuedAt(now)
+	claims.SetNotBefore(now)
+	claims.SetExpiration(now.Add(time.Hour))
+	jwt := jws.NewJWT(claims, crypto.SigningMethodRS256)
+
+	rawJwt, err := jwt.Serialize(pk)
+	Expect(err).Should(Succeed())
+	return rawJwt
 }

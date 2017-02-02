@@ -4,23 +4,19 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/json"
+	"net/http"
+	"sync"
+	"time"
+
 	"github.com/SermoDigital/jose/crypto"
 	"github.com/SermoDigital/jose/jws"
 	"github.com/julienschmidt/httprouter"
 	"github.com/justinas/alice"
-	"net/http"
-	"sync"
-	"time"
-)
-
-var (
-	gPkey   *rsa.PublicKey = nil
-	rwMutex sync.RWMutex
 )
 
 const params = "params"
 
-/* Errors to return */
+// Errors to return
 type Errors []string
 
 /*
@@ -36,14 +32,16 @@ type ssoKey struct {
 }
 
 /*
-OAuth structure that provides http connection to the URL that has the public
+oauth provides http an connection to the URL that has the public
 key for verifying the JWT token
 */
-type OAuth struct {
+type oauth struct {
+	gPkey   *rsa.PublicKey
+	rwMutex *sync.RWMutex
 }
 
 /*
-The interface functions offered to clients that act on OAuth param,
+OAuthService offers interface functions that act on OAuth param,
 used to verify JWT tokens for the Http handler functions client
 wishes to validate against (via SSOHandler).
 */
@@ -58,18 +56,13 @@ interface. OAuthService interface offers method:-
 verification.
 */
 func (s *HTTPScaffold) CreateOAuth(keyURL string) OAuthService {
-
-	pk, err := getPublicKey(keyURL)
-	if err == nil {
-		setPkSafe(pk)
+	pk, _ := getPublicKey(keyURL)
+	oa := &oauth{
+		rwMutex: &sync.RWMutex{},
 	}
-	/*
-	 * Routine that will fetch & update the public keys in safe manner
-	 */
-	updatePublicKeysPeriodic(keyURL)
-
-	return &OAuth{}
-
+	oa.setPkSafe(pk)
+	oa.updatePublicKeysPeriodic(keyURL)
+	return oa
 }
 
 /*
@@ -92,7 +85,7 @@ func FetchParams(r *http.Request) httprouter.Params {
 SSOHandler offers the users the flexibility of choosing which http handlers
 need JWT validation.
 */
-func (a *OAuth) SSOHandler(p string, h func(http.ResponseWriter, *http.Request)) (string, httprouter.Handle) {
+func (a *oauth) SSOHandler(p string, h func(http.ResponseWriter, *http.Request)) (string, httprouter.Handle) {
 	return p, a.VerifyOAuth(alice.New().ThenFunc(h))
 }
 
@@ -100,7 +93,7 @@ func (a *OAuth) SSOHandler(p string, h func(http.ResponseWriter, *http.Request))
 VerifyOAuth verifies the JWT token in the request using the public key configured
 via CreateOAuth constructor.
 */
-func (a *OAuth) VerifyOAuth(next http.Handler) httprouter.Handle {
+func (a *oauth) VerifyOAuth(next http.Handler) httprouter.Handle {
 
 	return func(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 
@@ -112,7 +105,7 @@ func (a *OAuth) VerifyOAuth(next http.Handler) httprouter.Handle {
 		}
 
 		/* Get the pulic key from cache */
-		pk := getPkSafe()
+		pk := a.getPkSafe()
 		if pk == nil {
 			WriteErrorResponse(http.StatusBadRequest, "Public key not configured. Validation failed.", rw)
 			return
@@ -152,7 +145,7 @@ func WriteErrorResponses(statusCode int, errors Errors, w http.ResponseWriter) {
 /*
 updatePulicKeysPeriodic updates the cache periodically (every hour)
 */
-func updatePublicKeysPeriodic(keyURL string) {
+func (a *oauth) updatePublicKeysPeriodic(keyURL string) {
 
 	ticker := time.NewTicker(time.Hour)
 	quit := make(chan struct{})
@@ -162,7 +155,7 @@ func updatePublicKeysPeriodic(keyURL string) {
 			case <-ticker.C:
 				pk, err := getPublicKey(keyURL)
 				if err == nil {
-					setPkSafe(pk)
+					a.setPkSafe(pk)
 				}
 			case <-quit:
 				ticker.Stop()
@@ -204,18 +197,18 @@ func getPublicKey(keyURL string) (*rsa.PublicKey, error) {
 /*
 setPkSafe Safely stores the Public Key (via a Write Lock)
 */
-func setPkSafe(pk *rsa.PublicKey) {
-	rwMutex.Lock()
-	gPkey = pk
-	rwMutex.Unlock()
+func (a *oauth) setPkSafe(pk *rsa.PublicKey) {
+	a.rwMutex.Lock()
+	a.gPkey = pk
+	a.rwMutex.Unlock()
 }
 
 /*
 getPkSafe returns the stored key (via a read lock)
 */
-func getPkSafe() *rsa.PublicKey {
-	rwMutex.RLock()
-	pk := gPkey
-	rwMutex.RUnlock()
+func (a *oauth) getPkSafe() *rsa.PublicKey {
+	a.rwMutex.RLock()
+	pk := a.gPkey
+	a.rwMutex.RUnlock()
 	return pk
 }
