@@ -404,17 +404,38 @@ var _ = Describe("Scaffold Tests", func() {
 			Expect(reqerr).Should(Succeed())
 			defer resp.Body.Close()
 			return resp.StatusCode
+			dataValue := resp.Header.Get("Status")
+			Expect(dataValue).To(Equal("200"))
+			return resp.StatusCode
 		}, 2*time.Second).Should(Equal(200))
 
-		req, err := http.NewRequest("GET",
-			"http://"+scaf.InsecureAddress()+"/foobar/xyz/123", nil)
+	})
+	It("SSO handler validation Bad Key", func() {
+		router := httprouter.New()
+		Expect(router).ShouldNot(BeNil())
+		scaf := CreateHTTPScaffold()
+		Expect(scaf).ShouldNot(BeNil())
+		err := scaf.Open()
 		Expect(err).Should(Succeed())
-		req.Header.Set("Authorization", "Bearer DEADBEEF")
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		Expect(err).Should(Succeed())
-		defer resp.Body.Close()
-		Expect(resp.StatusCode).Should(Equal(400))
+		oauth := scaf.CreateOAuth(validJWTSigner)
+		Expect(oauth).ShouldNot(BeNil())
+		go func() {
+			fmt.Fprintf(GinkgoWriter, "Gonna listen on %s\n", scaf.InsecureAddress())
+			router.GET(oauth.SSOHandler("/foobar/:param1/:param2", buslogicHandlerFail1))
+			scaf.Listen(router)
+		}()
+
+		Eventually(func() int {
+			req, err := http.NewRequest("GET",
+				"http://"+scaf.InsecureAddress()+"/foobar/xyz/123", nil)
+			Expect(err).Should(Succeed())
+			req.Header.Set("Authorization", "Bearer DEADBEEF")
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			Expect(err).Should(Succeed())
+			defer resp.Body.Close()
+			return resp.StatusCode
+		}, 2*time.Second).Should(Equal(200))
 	})
 
 	It("SSO handler validation bad public key", func() {
@@ -428,7 +449,7 @@ var _ = Describe("Scaffold Tests", func() {
 		Expect(oauth).ShouldNot(BeNil())
 		go func() {
 			fmt.Fprintf(GinkgoWriter, "Gonna listen on %s\n", scaf.InsecureAddress())
-			router.GET(oauth.SSOHandler("/foobar/:param1/:param2", buslogicHandler))
+			router.GET(oauth.SSOHandler("/foobar/:param1/:param2", buslogicHandlerFail2))
 			scaf.Listen(router)
 		}()
 
@@ -440,7 +461,7 @@ var _ = Describe("Scaffold Tests", func() {
 		resp, err := client.Do(req)
 		Expect(err).Should(Succeed())
 		defer resp.Body.Close()
-		Expect(resp.StatusCode).Should(Equal(400))
+		Expect(resp.StatusCode).Should(Equal(200))
 	})
 
 	It("Get stack trace", func() {
@@ -468,6 +489,27 @@ var _ = Describe("Scaffold Tests", func() {
 })
 
 func buslogicHandler(w http.ResponseWriter, r *http.Request) {
+	Expect(r.Header.Get("StatusCode")).Should(Equal("200"))
+	p := FetchParams(r)
+	cid := p.ByName("param1")
+	Expect(cid).To(Equal("xyz"))
+	cid = p.ByName("param2")
+	Expect(cid).To(Equal("123"))
+}
+
+func buslogicHandlerFail1(w http.ResponseWriter, r *http.Request) {
+	Expect(r.Header.Get("StatusCode")).Should(Equal("400"))
+	Expect(r.Header.Get("ErrorMessage")).Should(Equal("not a compact JWS"))
+	p := FetchParams(r)
+	cid := p.ByName("param1")
+	Expect(cid).To(Equal("xyz"))
+	cid = p.ByName("param2")
+	Expect(cid).To(Equal("123"))
+}
+
+func buslogicHandlerFail2(w http.ResponseWriter, r *http.Request) {
+	Expect(r.Header.Get("StatusCode")).Should(Equal("400"))
+	Expect(r.Header.Get("ErrorMessage")).Should(Equal("Public key not configured. Validation failed."))
 	p := FetchParams(r)
 	cid := p.ByName("param1")
 	Expect(cid).To(Equal("xyz"))

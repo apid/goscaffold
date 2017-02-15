@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -97,49 +98,45 @@ func (a *oauth) VerifyOAuth(next http.Handler) httprouter.Handle {
 
 	return func(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 
+		var err2 error = nil
+
+		/* Set the input params in the request if valid */
+		r = SetParamsInRequest(r, ps)
+		/* Set Default as OK */
+		WriteStatusResponse(http.StatusOK, "", r)
+
 		/* Parse the JWT from the input request */
-		jwt, err := jws.ParseJWTFromRequest(r)
-		if err != nil {
-			WriteErrorResponse(http.StatusBadRequest, err.Error(), rw)
-			return
+		jwt, err1 := jws.ParseJWTFromRequest(r)
+		if err1 != nil {
+			WriteStatusResponse(http.StatusBadRequest, err1.Error(), r)
 		}
 
 		/* Get the pulic key from cache */
-		pk := a.getPkSafe()
-		if pk == nil {
-			WriteErrorResponse(http.StatusBadRequest, "Public key not configured. Validation failed.", rw)
-			return
+		if err1 == nil {
+			pk := a.getPkSafe()
+			if pk == nil {
+				WriteStatusResponse(http.StatusBadRequest,
+					"Public key not configured. Validation failed.", r)
+			} else {
+				err2 = jwt.Validate(pk, crypto.SigningMethodRS256)
+				if err2 != nil {
+					WriteStatusResponse(http.StatusBadRequest,
+						err2.Error(), r)
+				}
+			}
 		}
-
-		/* Validate the token */
-		err = jwt.Validate(pk, crypto.SigningMethodRS256)
-		if err != nil {
-			WriteErrorResponse(http.StatusBadRequest, err.Error(), rw)
-			return
-		}
-
-		/* Set the input params in the request */
-		r = SetParamsInRequest(r, ps)
 		next.ServeHTTP(rw, r)
 	}
-
 }
 
 /*
-WriteErrorResponse write a non 200 error response
+WriteStatusResponse updates the validation outcome in the header.
 */
-func WriteErrorResponse(statusCode int, message string, w http.ResponseWriter) {
-	errors := Errors{message}
-	WriteErrorResponses(statusCode, errors, w)
-}
-
-/*
-WriteErrorResponses write our error responses
-*/
-func WriteErrorResponses(statusCode int, errors Errors, w http.ResponseWriter) {
-	w.WriteHeader(statusCode)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(errors)
+func WriteStatusResponse(statusCode int, message string, r *http.Request) {
+	r.Header.Set("StatusCode", strconv.Itoa(statusCode))
+	if statusCode != http.StatusOK {
+		r.Header.Set("ErrorMessage", message)
+	}
 }
 
 /*
