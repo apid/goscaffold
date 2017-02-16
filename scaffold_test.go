@@ -380,6 +380,9 @@ var _ = Describe("Scaffold Tests", func() {
 	})
 
 	It("SSO handler validation", func() {
+
+		var vals ErrorResponse
+
 		router := httprouter.New()
 		Expect(router).ShouldNot(BeNil())
 		scaf := CreateHTTPScaffold()
@@ -415,9 +418,18 @@ var _ = Describe("Scaffold Tests", func() {
 		Expect(err).Should(Succeed())
 		defer resp.Body.Close()
 		Expect(resp.StatusCode).Should(Equal(400))
+		body, err := ioutil.ReadAll(resp.Body)
+		Expect(err).Should(Succeed())
+		err = json.Unmarshal(body, &vals)
+		Expect(err).Should(Succeed())
+		Expect(vals.Status).Should(Equal("Bad Request"))
+		Expect(vals.Message).Should(Equal("not a compact JWS"))
 	})
 
 	It("SSO handler validation bad public key", func() {
+
+		var vals ErrorResponse
+
 		router := httprouter.New()
 		Expect(router).ShouldNot(BeNil())
 		scaf := CreateHTTPScaffold()
@@ -441,6 +453,12 @@ var _ = Describe("Scaffold Tests", func() {
 		Expect(err).Should(Succeed())
 		defer resp.Body.Close()
 		Expect(resp.StatusCode).Should(Equal(400))
+		body, err := ioutil.ReadAll(resp.Body)
+		Expect(err).Should(Succeed())
+		err = json.Unmarshal(body, &vals)
+		Expect(err).Should(Succeed())
+		Expect(vals.Status).Should(Equal("Bad Request"))
+		Expect(vals.Message).Should(Equal("Public key not configured. Validation failed."))
 	})
 
 	It("Get stack trace", func() {

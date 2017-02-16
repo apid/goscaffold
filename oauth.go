@@ -41,6 +41,16 @@ type oauth struct {
 }
 
 /*
+ErrorResponse delivers the errors back to the caller, once validation
+has failed
+*/
+type ErrorResponse struct {
+	Status  string   `json:"status"`
+	Message string   `json:"message"`
+	Errors  []string `json:"errors"`
+}
+
+/*
 OAuthService offers interface functions that act on OAuth param,
 used to verify JWT tokens for the Http handler functions client
 wishes to validate against (via SSOHandler).
@@ -129,17 +139,17 @@ func (a *oauth) VerifyOAuth(next http.Handler) httprouter.Handle {
 WriteErrorResponse write a non 200 error response
 */
 func WriteErrorResponse(statusCode int, message string, w http.ResponseWriter) {
-	errors := Errors{message}
-	WriteErrorResponses(statusCode, errors, w)
-}
+	var errstr []string
 
-/*
-WriteErrorResponses write our error responses
-*/
-func WriteErrorResponses(statusCode int, errors Errors, w http.ResponseWriter) {
-	w.WriteHeader(statusCode)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(errors)
+	w.WriteHeader(statusCode)
+	errstr = append(errstr, http.StatusText(statusCode))
+	resp := ErrorResponse{
+		Status:  http.StatusText(statusCode),
+		Message: message,
+		Errors:  errstr,
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 /*
