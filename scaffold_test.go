@@ -36,8 +36,8 @@ import (
 )
 
 const (
-	validJWTSigner   = "https://raw.githubusercontent.com/30x/goscaffold/master/testkeys/jwtcert.json"
-	invalidJWTSigner = "https://raw.githubusercontent.com/30x/goscaffold/master/testkeys/notfound.json"
+	validJWTSigner   = "https://raw.githubusercontent.com/apid/goscaffold/master/testkeys/jwtcert.json"
+	invalidJWTSigner = "https://raw.githubusercontent.com/apid/goscaffold/master/testkeys/notfound.json"
 )
 
 var (
@@ -629,9 +629,9 @@ func createJWT() []byte {
 
 	claims := jws.Claims{}
 	now := time.Now()
-	claims.SetAudience("http://github.com/30x/goscaffold")
-	claims.SetIssuer("http://github.com/30x/goscaffold")
-	claims.SetSubject("http://github.com/30x/goscaffold")
+	claims.SetAudience("http://github.com/apid/goscaffold")
+	claims.SetIssuer("http://github.com/apid/goscaffold")
+	claims.SetSubject("http://github.com/apid/goscaffold")
 	claims.SetIssuedAt(now)
 	claims.SetNotBefore(now)
 	claims.SetExpiration(now.Add(time.Hour))
